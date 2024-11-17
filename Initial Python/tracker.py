@@ -2,17 +2,19 @@ import socket
 import threading
 import json
 import os
-from process import generate_file_hash, generate_magnet_link
 import uuid
 import base64
+from process import generate_file_hash, generate_magnet_link
 
 
 class Tracker:
     def __init__(self, host="0.0.0.0", port=2901):
         self.host = host
         self.port = port
-        self.nodes = {}
-        self.file_registry = {}
+        self.nodes = (
+            {}
+        )  # Stores file hash -> node_id -> node data (including file pieces)
+        self.file_registry = {}  # Stores file name -> file hash for quick lookup
         self.lock = threading.Lock()
 
     def start_server(self):

@@ -18,6 +18,7 @@ class Client:
         try:
             self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.client_socket.connect((self.tracker_host, self.tracker_port))
+            print("Connected to tracker.")
         except Exception as e:
             print(f"Failed to connect to tracker: {e}")
             exit(1)
@@ -38,6 +39,7 @@ class Client:
         for index, piece in pieces:
             self.upload_piece(file_hash, index, piece)
             self.save_piece(file_hash, index, piece)  # Save piece locally
+            print(f"Piece {index} saved successfully.")
         request = {
             "node_id": self.node_id,
             "command": "upload",
@@ -46,9 +48,18 @@ class Client:
             "file_pieces": [index for index, _ in pieces],
             "magnet_link": magnet_link,
         }
-        self.send_request(request)
+        response = self.send_request(request)
+        if response:
+            response = json.loads(response)
+            if response["status"] == "success":
+                print("File uploaded successfully.")
+            else:
+                print(f"Error from tracker: {response['message']}")
+        else:
+            print("No response from tracker.")
 
     def download_file(self, file_name, save_location):
+        print(f"Downloading file: {file_name}")
         request = {
             "command": "download",
             "file_name": file_name,
@@ -64,7 +75,9 @@ class Client:
                         piece_index = piece["piece_index"]
                         piece_data = base64.b64decode(piece["piece_data"])
                         self.save_piece(file_name, piece_index, piece_data)
+                        print(f"Piece {piece_index} downloaded and saved successfully.")
                     self.reassemble_file(file_name, save_location, file_name)
+                    print(f"File {file_name} reassembled successfully.")
                 else:
                     print(f"Error from tracker: {response['message']}")
             else:
@@ -77,19 +90,15 @@ class Client:
     def send_request(self, request, expect_response=True):
         """Send a request to the tracker with an optional response handling."""
         try:
-            # Send request
-            self.client_socket.send(json.dumps(request).encode("utf-8"))
+            # Convert the request dictionary to a JSON string
+            request_str = json.dumps(request)
+            # Send request as a JSON string
+            self.client_socket.send(request_str.encode("utf-8"))
 
             if expect_response:
-                # Increase timeout in case of delayed response
-                self.client_socket.settimeout(100)
-
-                # Receive response
+                # Wait indefinitely for a response
                 response = self.client_socket.recv(1024).decode("utf-8")
-                print("Response from tracker:", response)
                 return response
-        except socket.timeout:
-            print("Request timed out. Retrying...")
         except (socket.error, Exception) as e:
             print(f"Error sending request: {e}")
         return None
@@ -171,14 +180,8 @@ if __name__ == "__main__":
     client.connect_to_tracker()
     # client.run()
 
-    print("----------------")
-    print("| New response |")
-    print("----------------")
-    client.upload_file("/Users/tranhoangphuc/Downloads/hello.txt", "hello.txt")
+    name = "test.txt"
+    client.upload_file(f"/Users/tranhoangphuc/Downloads/{name}", f"{name}")
     print("\n")
-
-    print("----------------")
-    print("| New response |")
-    print("----------------")
-    client.download_file("hello.txt", "/Users/tranhoangphuc/")
+    client.download_file(f"{name}", "/Users/tranhoangphuc/")
     print("\n")
