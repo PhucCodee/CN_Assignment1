@@ -2,12 +2,13 @@ import socket
 import threading
 import json
 import os
-from process import generate_file_hash, generate_magnet_link
 import uuid
+import base64
+from process import generate_file_hash, generate_magnet_link
 
 
 class Tracker:
-    def __init__(self, host="0.0.0.0", port=5001):
+    def __init__(self, host="0.0.0.0", port=2901):
         self.host = host
         self.port = port
         self.nodes = (
@@ -46,6 +47,8 @@ class Tracker:
                 self.handle_upload(request, client_socket)
             elif command == "download":
                 self.handle_download(request, client_socket)
+            elif command == "upload_piece":
+                self.handle_piece_upload(request, client_socket)
             else:
                 response = {"error": "Unknown command"}
                 client_socket.send(json.dumps(response).encode("utf-8"))
@@ -63,60 +66,70 @@ class Tracker:
 
     def register_node(self, request, client_socket):
         """Register a new node and assign a unique node ID."""
-        # Generate a unique node ID
-        node_id = self.generate_node_id()
+        try:
+            # Generate a unique node ID
+            node_id = self.generate_node_id()
 
-        # The peer sends the file name and file hash for the initial registration
-        file_name = request.get("file_name")
-        file_hash = request.get("file_hash")
-        file_pieces = request.get("file_pieces", [])
-        magnet_link = request.get("magnet_link")
+            # The peer sends the file name and file hash for the initial registration
+            file_name = request.get("file_name")
+            file_hash = request.get("file_hash")
+            file_pieces = request.get("file_pieces", [])
+            magnet_link = request.get("magnet_link")
 
-        # Store the file registry for quick lookup by file name
-        self.file_registry[file_name] = file_hash
+            # Store the file registry for quick lookup by file name
+            self.file_registry[file_name] = file_hash
 
-        # Store the node information under the corresponding file hash
-        with self.lock:
-            if file_hash not in self.nodes:
-                self.nodes[file_hash] = {}
-            self.nodes[file_hash][node_id] = {
-                "file_pieces": file_pieces,
-                "magnet_link": magnet_link,
+            # Store the node information under the corresponding file hash
+            with self.lock:
+                if file_hash not in self.nodes:
+                    self.nodes[file_hash] = {}
+                self.nodes[file_hash][node_id] = {
+                    "file_pieces": file_pieces,
+                    "magnet_link": magnet_link,
+                }
+
+            response = {
+                "status": "success",
+                "node_id": node_id,
+                "message": "Node registered successfully",
             }
-
-        response = {
-            "status": "success",
-            "node_id": node_id,
-            "message": "Node registered successfully",
-        }
-        client_socket.send(json.dumps(response).encode("utf-8"))
+            client_socket.send(json.dumps(response).encode("utf-8"))
+        except Exception as e:
+            print(f"Error in register_node: {e}")
+            response = {"status": "error", "message": f"Server error: {e}"}
+            client_socket.send(json.dumps(response).encode("utf-8"))
 
     def handle_upload(self, request, client_socket):
         """Handle file upload by registering the file and sharing pieces among peers."""
-        node_id = request.get("node_id")
-        file_name = request.get("file_name")
-        file_hash = request.get("file_hash")
-        file_pieces = request.get("file_pieces")
-        magnet_link = request.get("magnet_link")
+        try:
+            node_id = request.get("node_id")
+            file_name = request.get("file_name")
+            file_hash = request.get("file_hash")
+            file_pieces = request.get("file_pieces")
+            magnet_link = request.get("magnet_link")
 
-        with self.lock:
-            if file_hash not in self.nodes:
-                self.nodes[file_hash] = {}
+            with self.lock:
+                if file_hash not in self.nodes:
+                    self.nodes[file_hash] = {}
 
-            self.nodes[file_hash][node_id] = {
-                "file_pieces": file_pieces,
-                "magnet_link": magnet_link,
+                self.nodes[file_hash][node_id] = {
+                    "file_pieces": file_pieces,
+                    "magnet_link": magnet_link,
+                }
+
+            # Share the file pieces with other peers for this file
+            peers = self.get_peers(file_hash, node_id)
+
+            response = {
+                "status": "success",
+                "message": "File uploaded successfully",
+                "peers": peers,
             }
-
-        # Share the file pieces with other peers for this file
-        peers = self.get_peers(file_hash, node_id)
-
-        response = {
-            "status": "success",
-            "message": "File uploaded successfully",
-            "peers": peers,
-        }
-        client_socket.send(json.dumps(response).encode("utf-8"))
+            client_socket.send(json.dumps(response).encode("utf-8"))
+        except Exception as e:
+            print(f"Error in handle_upload: {e}")
+            response = {"status": "error", "message": f"Server error: {e}"}
+            client_socket.send(json.dumps(response).encode("utf-8"))
 
     def get_peers(self, file_hash, exclude_node_id=None):
         """Return a list of peers (excluding the given node ID) holding file pieces."""
@@ -133,30 +146,37 @@ class Tracker:
         return peers
 
     def handle_download(self, request, client_socket):
-        """Handle file download by finding peers that have the missing file pieces."""
-        file_name = request.get("file_name")
-        file_hash = self.file_registry.get(file_name)
+        try:
+            file_name = request.get("file_name")
+            file_hash = self.file_registry.get(file_name)
 
-        if not file_hash:
-            response = {"status": "error", "message": "File not found"}
+            if not file_hash:
+                response = {"status": "error", "message": "File not found"}
+                client_socket.send(json.dumps(response).encode("utf-8"))
+                return
+
+            client_pieces = request.get("client_pieces", [])
+            missing_pieces = self.get_missing_pieces(file_hash, client_pieces)
+
+            with self.lock:
+                peers = self.get_peers_with_pieces(file_hash, missing_pieces)
+
+            if peers:
+                response = {
+                    "status": "success",
+                    "message": "Peers found for downloading",
+                    "peers": peers,
+                }
+            else:
+                response = {
+                    "status": "error",
+                    "message": "No peers with missing pieces",
+                }
             client_socket.send(json.dumps(response).encode("utf-8"))
-            return
-
-        missing_pieces = request.get("missing_pieces", [])
-
-        with self.lock:
-            # Find peers with the missing file pieces
-            peers = self.get_peers_with_pieces(file_hash, missing_pieces)
-
-        if peers:
-            response = {
-                "status": "success",
-                "message": "Peers found for downloading",
-                "peers": peers,
-            }
-        else:
-            response = {"status": "error", "message": "No peers with missing pieces"}
-        client_socket.send(json.dumps(response).encode("utf-8"))
+        except Exception as e:
+            print(f"Error in handle_download: {e}")
+            response = {"status": "error", "message": f"Server error: {e}"}
+            client_socket.send(json.dumps(response).encode("utf-8"))
 
     def get_peers_with_pieces(self, file_hash, missing_pieces):
         """Return peers that have the requested file pieces."""
@@ -174,6 +194,38 @@ class Tracker:
                     }
                 )
         return peers
+
+    def save_piece(self, file_hash, piece_index, piece_data):
+        os.makedirs(file_hash, exist_ok=True)
+        with open(f"{file_hash}/{piece_index}.piece", "wb") as f:
+            f.write(piece_data)
+
+    def handle_piece_upload(self, request, client_socket):
+        try:
+            file_hash = request["file_hash"]
+            piece_index = request["piece_index"]
+            piece_data = base64.b64decode(request["piece_data"])
+
+            self.save_piece(file_hash, piece_index, piece_data)
+
+            response = {"status": "success", "message": "Piece saved successfully."}
+            client_socket.send(json.dumps(response).encode("utf-8"))
+        except Exception as e:
+            print(f"Error in handle_piece_upload: {e}")
+            response = {"status": "error", "message": f"Server error: {e}"}
+            client_socket.send(json.dumps(response).encode("utf-8"))
+
+    def get_missing_pieces(self, file_hash, client_pieces):
+        stored_pieces = set(os.listdir(file_hash))
+        missing = set(client_pieces) - {int(p.split(".")[0]) for p in stored_pieces}
+        return list(missing)
+
+    def assemble_file(self, file_hash):
+        pieces = sorted(os.listdir(file_hash), key=lambda x: int(x.split(".")[0]))
+        with open(f"{file_hash}.complete", "wb") as outfile:
+            for piece in pieces:
+                with open(f"{file_hash}/{piece}", "rb") as infile:
+                    outfile.write(infile.read())
 
 
 if __name__ == "__main__":
