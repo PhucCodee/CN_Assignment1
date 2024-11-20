@@ -1,0 +1,48 @@
+void insert(int key)
+{
+    int index = hash(key) % size;
+    for (int item : data[index])
+    {
+        if (item == key)
+        {
+            throw "Duplicate key not allowed!";
+        }
+    }
+    data[index].push_back(key);
+}
+
+void remove(int key)
+{
+    int index = hash(key) % size;
+    list<int> &chain = data[index];
+    bool found = false;
+
+    for (auto it = chain.begin(); it != chain.end(); ++it)
+    {
+        cout << *it << ","; // Print values compared during search
+        if (*it == key)
+        {
+            chain.erase(it); // Remove the key
+            found = true;
+            break;
+        }
+    }
+    if (!found)
+    {
+        throw runtime_error("Not found!");
+    }
+}
+
+bool search(int key)
+{
+    int index = hash(key) % size;
+    for (int item : data[index])
+    {
+        cout << item << ",";
+        if (item == key)
+        {
+            return true;
+        }
+    }
+    return false;
+}
