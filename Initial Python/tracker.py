@@ -2,8 +2,8 @@ import socket
 import threading
 import json
 import os
-from process import generate_file_hash, generate_magnet_link
 import uuid
+import base64
 
 
 class Tracker:
@@ -143,30 +143,39 @@ class Tracker:
         return peers
 
     def handle_download(self, request, client_socket):
-        """Handle file download by finding peers that have the missing file pieces."""
-        file_name = request.get("file_name")
-        file_hash = self.file_registry.get(file_name)
+        try:
+            file_name = request.get("file_name")
+            file_hash = self.file_registry.get(file_name)
 
             if not file_hash:
                 response = {"status": "error", "message": "File not found"}
                 client_socket.send(json.dumps(response).encode("utf-8"))
                 return
 
-        missing_pieces = request.get("missing_pieces", [])
+            with self.lock:
+                peers = self.get_peers(file_hash)
+                magnet_link = self.nodes[file_hash][
+                    list(self.nodes[file_hash].keys())[0]
+                ]["magnet_link"]
 
-        with self.lock:
-            # Find peers with the missing file pieces
-            peers = self.get_peers_with_pieces(file_hash, missing_pieces)
-
-        if peers:
-            response = {
-                "status": "success",
-                "message": "Peers found for downloading",
-                "peers": peers,
-            }
-        else:
-            response = {"status": "error", "message": "No peers with missing pieces"}
-        client_socket.send(json.dumps(response).encode("utf-8"))
+            if peers:
+                response = {
+                    "status": "success",
+                    "message": "Peers found for downloading",
+                    "peers": peers,
+                    "file_hash": file_hash,
+                    "magnet_link": magnet_link,
+                }
+            else:
+                response = {
+                    "status": "error",
+                    "message": "No peers with the requested file",
+                }
+            client_socket.send(json.dumps(response).encode("utf-8"))
+        except Exception as e:
+            print(f"Error in handle_download: {e}")
+            response = {"status": "error", "message": f"Server error: {e}"}
+            client_socket.send(json.dumps(response).encode("utf-8"))
 
     def get_peers_with_pieces(self, file_hash, missing_pieces):
         """Return peers that have the requested file pieces."""
