@@ -1,32 +1,40 @@
 import socket
 import json
 import os
+import time
+import base64
 import base64
 import time
 from process import generate_file_hash, generate_magnet_link
 
 
 class Client:
-    def __init__(self, tracker_host="127.0.0.1", tracker_port=5001):
+    def __init__(self, tracker_host="127.0.0.1", tracker_port=2901):
         self.tracker_host = tracker_host
         self.tracker_port = tracker_port
-        self.node_id = (
-            None  # Node ID will be generated when registering with the tracker
-        )
+        self.node_id = None
+        self.client_socket = None
 
     def connect_to_tracker(self):
         """Establish a connection with the tracker."""
         try:
             self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.client_socket.connect((self.tracker_host, self.tracker_port))
+            print("Connected to tracker.")
         except Exception as e:
             print(f"Failed to connect to tracker: {e}")
             exit(1)
 
     def upload_file(self, file_path, file_name):
-        """Upload a file by registering it with the tracker (called only once)."""
+        if not os.path.isfile(file_path):
+            print(f"Error: {file_path} is not a valid file.")
+            return
+
         print(f"Uploading file: {file_path}")
         file_hash = generate_file_hash(file_path)
+        if file_hash is None:
+            print(f"Error generating hash for {file_path}")
+            return
 
         if file_hash is None:
             print(f"Error generating hash for {file_path}")
@@ -38,13 +46,18 @@ class Client:
             self.upload_piece(file_hash, index, piece)
             self.save_piece(file_hash, index, piece)  # Save piece locally
             print(f"Piece {index} saved successfully.")
+        pieces = self.divide_file(file_path)
+        for index, piece in pieces:
+            self.upload_piece(file_hash, index, piece)
+            self.save_piece(file_hash, index, piece)  # Save piece locally
+            print(f"Piece {index} saved successfully.")
 
         request = {
             "node_id": self.node_id,
             "command": "upload",
             "file_name": file_name,
             "file_hash": file_hash,
-            "file_pieces": [],  # No pieces for now
+            "file_pieces": [index for index, _ in pieces],
             "magnet_link": magnet_link,
         }
         response = self.send_request(request)
@@ -186,15 +199,60 @@ class Client:
                 file_name = input("Enter the file name to download: ")
                 save_location = input("Enter the location to save the file: ")
                 self.download_file(file_name, save_location)
+                self.download_file(file_name, save_location)
             elif choice == "3":
                 print("Exiting...")
                 self.client_socket.close()
+                time.sleep(2)
+                print("Session terminated successfully")
                 time.sleep(2)
                 print("Session terminated successfully")
                 break
             else:
                 print("Invalid option. Please try again.")
             print("\n")
+
+            print("\n")
+
+    def divide_file(self, file_path, piece_size=1024):
+        pieces = []
+        with open(file_path, "rb") as f:
+            index = 0
+            while chunk := f.read(piece_size):
+                pieces.append((index, chunk))
+                index += 1
+        return pieces
+
+    def upload_piece(self, file_hash, piece_index, piece_data):
+        encoded_piece_data = base64.b64encode(piece_data).decode("utf-8")
+        request = {
+            "command": "upload_piece",
+            "file_hash": file_hash,
+            "piece_index": piece_index,
+            "piece_data": encoded_piece_data,
+        }
+        self.send_request(request, expect_response=False)
+
+    def request_missing_pieces(self, file_name, missing_pieces):
+        request = {
+            "command": "download_pieces",
+            "file_name": file_name,
+            "missing_pieces": missing_pieces,
+        }
+        self.send_request(request)
+
+    def save_piece(self, file_hash, piece_index, piece_data):
+        os.makedirs(file_hash, exist_ok=True)
+        with open(f"{file_hash}/{piece_index}.piece", "wb") as f:
+            f.write(piece_data)
+
+    def reassemble_file(self, file_hash, output_dir, file_name):
+        pieces = sorted(os.listdir(file_hash), key=lambda x: int(x.split(".")[0]))
+        output_path = os.path.join(output_dir, file_name)
+        with open(output_path, "wb") as outfile:
+            for piece in pieces:
+                with open(f"{file_hash}/{piece}", "rb") as infile:
+                    outfile.write(infile.read())
 
 
 if __name__ == "__main__":
